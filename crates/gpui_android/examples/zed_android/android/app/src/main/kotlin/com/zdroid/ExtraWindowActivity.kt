@@ -639,6 +639,10 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
                     sumRx += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
                     sumRy += sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
                 }
+                val rotation = currentDisplayRotation()
+                val remapped = remapCapturedRelativeDelta(event, sumRx, sumRy, rotation)
+                sumRx = remapped.first
+                sumRy = remapped.second
                 val (maxX, maxY) = visibleBounds()
                 // Mouse-tuned pointer curve (shared accelerateMouse) so the
                 // cursor in this window feels identical to the primary one.
@@ -670,11 +674,15 @@ class ExtraWindowActivity : AppCompatActivity(), ImeHost {
         val ys = FloatArray(n)
         val rxs = FloatArray(n)
         val rys = FloatArray(n)
+        val rotation = currentDisplayRotation()
         for (i in 0 until n) {
             xs[i] = event.getX(i)
             ys[i] = event.getY(i)
-            rxs[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
-            rys[i] = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+            val rawRx = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_X, i)
+            val rawRy = sumRelativeAxis(event, MotionEvent.AXIS_RELATIVE_Y, i)
+            val mapped = remapCapturedRelativeDelta(event, rawRx, rawRy, rotation)
+            rxs[i] = mapped.first
+            rys[i] = mapped.second
         }
         val vs = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
         val hs = event.getAxisValue(MotionEvent.AXIS_HSCROLL)

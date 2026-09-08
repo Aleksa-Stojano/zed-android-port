@@ -21,7 +21,10 @@ async-channel.workspace = true
 agent.workspace = true
 agent-client-protocol.workspace = true
 agent_settings.workspace = true
-agent_ui = { workspace = true, features = ["audio"] }
+# Audio is optional on agent_ui (voice playback). Desktop `zed` enables
+# `agent_ui/audio` itself; leave it off here so the Android example
+# workspace does not pull cpal/rodio.
+agent_ui.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 editor.workspace = true

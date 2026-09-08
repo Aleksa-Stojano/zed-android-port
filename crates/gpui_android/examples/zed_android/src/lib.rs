@@ -21,6 +21,7 @@ use db::kvp::KeyValueStore;
 use fs::{Fs, RealFs};
 use node_runtime::NodeRuntime;
 use project::Project;
+use prompt_store::PromptBuilder;
 use session::{AppSession, Session};
 use gpui::{App, AppContext as _, TaskExt as _, UpdateGlobal as _};
 use log::{error, info};
@@ -747,7 +748,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     let workspace_store = cx.new(|cx| WorkspaceStore::new(client.clone(), cx));
     info!("zed_android: UserStore + WorkspaceStore constructed");
 
-    let fs: Arc<dyn Fs> = Arc::new(RealFs::new(None, cx.background_executor().clone()));
+    let fs: Arc<dyn Fs> = RealFs::new(None, cx.background_executor().clone());
     <dyn Fs>::set_global(fs.clone(), cx);
     // Real NodeRuntime, mirroring crates/zed/src/main.rs:496-518. The
     // earlier port stage stubbed this out as `NodeRuntime::unavailable()`
@@ -1088,9 +1089,8 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // Modal pickers / panels — mirror production zed/src/main.rs init order.
     // Each registers its own actions + a SettingsStore observer if needed.
     // Skipped from production (non-portable on Android): audio/call/livekit
-    // (collab), agent_ui/copilot/language_models (AI), debugger_ui/repl
-    // (DAP/Jupyter), auto_update (we self-distribute), telemetry/crashes,
-    // extension_host (deferred to L3).
+    // (collab), copilot_ui, debugger_ui/repl (DAP/Jupyter), auto_update
+    // (we self-distribute), telemetry/crashes.
     go_to_line::init(cx);
     file_finder::init(cx);
     tab_switcher::init(cx);
@@ -1102,7 +1102,7 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     snippet_provider::init(cx);
     snippets_ui::init(cx);
     image_viewer::init(cx);
-    csv_preview::init(cx);
+    tabular_data_preview::init(cx);
     svg_preview::init(cx);
     markdown_preview::init(cx);
     encoding_selector::init(cx);
@@ -1119,6 +1119,35 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     // panics at first paint with "no state of type
     // language_model::registry::GlobalLanguageModelRegistry exists".
     language_model::init(cx);
+    client::RefreshLlmTokenListener::register(
+        client.clone(),
+        app_state.user_store.clone(),
+        cx,
+    );
+    language_models::init(app_state.user_store.clone(), client.clone(), cx);
+    acp_tools::init(cx);
+    web_search::init(cx);
+    web_search_providers::init(client.clone(), app_state.user_store.clone(), cx);
+    let prompt_builder = PromptBuilder::load(app_state.fs.clone(), false, cx);
+    project::AgentRegistryStore::init_global(
+        cx,
+        app_state.fs.clone(),
+        client.http_client(),
+    );
+    agent_ui::init(
+        app_state.fs.clone(),
+        prompt_builder,
+        app_state.languages.clone(),
+        false,
+        false,
+        cx,
+    );
+    agent_settings::init_user_agents_md(app_state.fs.clone(), cx, |state, _cx| {
+        if let Some(error) = state.error() {
+            log::warn!("zed_android: failed to load AGENTS.md: {error}");
+        }
+    });
+    info!("zed_android: agent_ui + language model providers initialized");
     // Also covers the git graph (commit history) view: upstream folded
     // crates/git_graph into git_ui, so its serializable item, action
     // handlers, and database domain register here.
@@ -1210,19 +1239,37 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
     })
     .detach();
 
-    // Mirror production's zed/src/zed.rs `initialize_panels`: every
-    // newly-constructed workspace asynchronously loads each panel and
-    // attaches it. Production loads project / outline / terminal / git /
-    // collab / debug / agent panels in parallel; we only ship the ones
-    // whose deps are already wired (project_panel, outline_panel for now).
-    // The PanelButtons in the status bar render one button per
-    // registered panel, so adding more panels here surfaces more
-    // bottom-bar buttons for free.
+    // Mirror production's zed/src/zed.rs `initialize_workspace`: register
+    // the Agents/Threads sidebar on every MultiWorkspace, then load panels
+    // (including AgentPanel) on every Workspace.
     let observe_app_state = app_state.clone();
+    cx.observe_new(|_multi_workspace: &mut MultiWorkspace, window, cx| {
+        let Some(window) = window else { return };
+        let window_handle = window.window_handle();
+        let multi_workspace_handle = cx.entity();
+        cx.defer(move |cx| {
+            window_handle
+                .update(cx, |_, window, cx| {
+                    let sidebar =
+                        cx.new(|cx| sidebar::Sidebar::new(multi_workspace_handle.clone(), window, cx));
+                    multi_workspace_handle.update(cx, |multi_workspace, cx| {
+                        multi_workspace.register_sidebar(sidebar, cx);
+                    });
+                })
+                .ok();
+        });
+    })
+    .detach();
+
     cx.observe_new(move |workspace: &mut Workspace, window, cx| {
         let Some(window) = window else { return };
 
         workspace.register_action(editor::open_project_settings_file);
+        workspace
+            .register_action(agent_ui::AgentPanel::toggle_focus)
+            .register_action(agent_ui::AgentPanel::focus)
+            .register_action(agent_ui::AgentPanel::toggle)
+            .register_action(agent_ui::InlineAssistant::inline_assist);
 
         // CloseProject: action wired in production at
         // `crates/zed/src/zed.rs:1123-1180`. Production binds it inside
@@ -1435,10 +1482,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
         // Mirror production's `initialize_panels`: every newly-constructed
         // workspace asynchronously loads each panel and attaches it.
         // Production loads project / outline / terminal / git / collab /
-        // debug / agent panels in parallel; we only ship the ones whose
-        // deps are already wired. The PanelButtons in the status bar
-        // render one button per registered panel, so adding more panels
-        // surfaces more bottom-bar buttons for free.
+        // debug / agent panels in parallel; we ship the ones whose deps
+        // are already wired, including the agent panel so Agents/Threads
+        // in the workspace sidebar have a live panel to drive.
         let weak = cx.weak_entity();
         cx.spawn_in(window, async move |_, cx| {
             let project_panel =
@@ -1449,14 +1495,15 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                 terminal_view::terminal_panel::TerminalPanel::load(weak.clone(), cx.clone());
             let git_panel =
                 git_ui::git_panel::GitPanel::load(weak.clone(), cx.clone());
-            let (project_panel, outline_panel, terminal_panel, git_panel) =
-                futures::future::join4(
+            let agent_panel = agent_ui::AgentPanel::load(weak.clone(), cx.clone());
+            let (project_panel, outline_panel, terminal_panel, git_panel, agent_panel) =
+                futures::join!(
                     project_panel,
                     outline_panel,
                     terminal_panel,
                     git_panel,
-                )
-                .await;
+                    agent_panel,
+                );
             weak.update_in(cx, |workspace, window, cx| {
                 if let Ok(panel) = project_panel {
                     workspace.add_panel(panel, window, cx);
@@ -1468,6 +1515,9 @@ fn boot(cx: &mut App, data_path: &std::path::Path) -> Result<()> {
                     workspace.add_panel(panel, window, cx);
                 }
                 if let Ok(panel) = git_panel {
+                    workspace.add_panel(panel, window, cx);
+                }
+                if let Ok(panel) = agent_panel {
                     workspace.add_panel(panel, window, cx);
                 }
             })?;

@@ -1,6 +1,11 @@
 package com.zdroid
 
+import android.app.Activity
+import android.os.Build
+import android.util.Log
+import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.Surface
 
 /// Sum all historical + current samples of a relative MotionEvent axis.
 /// `AXIS_RELATIVE_X` / `AXIS_RELATIVE_Y` are NOT accumulated across
@@ -37,3 +42,61 @@ internal fun accelerateMouse(delta: Float): Float {
 private const val MOUSE_SENSITIVITY = 1.6f
 private const val MOUSE_ACCEL_COEF = 0.004f
 private const val MOUSE_ACCEL_CAP = 2.0f
+
+private const val POINTER_TAG = "ZdroidPointer"
+
+/// Display rotation in Surface.ROTATION_* constants.
+internal fun Activity.currentDisplayRotation(): Int {
+    val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        display
+    } else {
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay
+    }
+    return display?.rotation ?: Surface.ROTATION_0
+}
+
+/// Bluetooth mice already emit screen-space deltas. Trackpads (including
+/// Samsung Book Cover, which often reports SOURCE_MOUSE + TOOL_TYPE_FINGER)
+/// deliver device-axis counts under pointer capture and need a rotation remap.
+internal fun shouldRemapRelativeAxes(event: MotionEvent): Boolean {
+    if (event.source and InputDevice.SOURCE_TOUCHPAD != 0) {
+        return true
+    }
+    if (event.pointerCount == 0) {
+        return false
+    }
+    val tool = event.getToolType(0)
+    return tool == MotionEvent.TOOL_TYPE_FINGER
+}
+
+/// Map device-axis relative deltas into screen space after display rotation.
+/// Screen coords: +X right, +Y down. ROTATION_90 is 90° clockwise:
+/// right→down, down→left, left→up, up→right — the Tab S8 Ultra Book Cover
+/// landscape mismatch.
+internal fun remapCapturedRelativeDelta(
+    event: MotionEvent,
+    rx: Float,
+    ry: Float,
+    rotation: Int,
+): Pair<Float, Float> {
+    if (!shouldRemapRelativeAxes(event)) {
+        return rx to ry
+    }
+    val mapped = when (rotation) {
+        Surface.ROTATION_0 -> rx to ry
+        Surface.ROTATION_90 -> ry to -rx
+        Surface.ROTATION_180 -> -rx to -ry
+        Surface.ROTATION_270 -> -ry to rx
+        else -> rx to ry
+    }
+    if (Log.isLoggable(POINTER_TAG, Log.DEBUG) && (rx != 0f || ry != 0f)) {
+        val tool = if (event.pointerCount > 0) event.getToolType(0) else -1
+        Log.d(
+            POINTER_TAG,
+            "rot=$rotation src=0x${Integer.toHexString(event.source)} tool=$tool " +
+                "raw=($rx,$ry) mapped=(${mapped.first},${mapped.second})",
+        )
+    }
+    return mapped
+}

@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    ffi::c_void,
+    ffi::{c_void, OsString},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
@@ -165,7 +165,7 @@ fn install_choreographer_callback() {
 #[derive(Default)]
 pub(crate) struct PlatformHandlers {
     pub(crate) open_urls: Option<Box<dyn FnMut(Vec<String>)>>,
-    pub(crate) quit: Option<Box<dyn FnMut()>>,
+    pub(crate) quit: Option<Box<dyn FnMut() -> bool>>,
     pub(crate) reopen: Option<Box<dyn FnMut()>>,
     pub(crate) app_menu_action: Option<Box<dyn FnMut(&dyn Action)>>,
     pub(crate) will_open_app_menu: Option<Box<dyn FnMut()>>,
@@ -1219,16 +1219,19 @@ impl Platform for AndroidPlatform {
         log::info!("AndroidPlatform::run: exiting event loop");
         let quit = self.common.borrow_mut().callbacks.quit.take();
         if let Some(mut fun) = quit {
-            fun();
+            let _ = fun();
         }
     }
 
     fn quit(&self) {
+        let _ = self
+            .common
+            .borrow_mut()
+            .callbacks
+            .quit
+            .as_mut()
+            .map(|fun| fun());
         self.common.borrow_mut().running = false;
-        let quit = self.common.borrow_mut().callbacks.quit.take();
-        if let Some(mut fun) = quit {
-            fun();
-        }
         // gpui's quit hook only stops the run loop. On Android the
         // hosting GameActivity stays alive (its JVM-side thread keeps
         // running independently of `android_main` returning), so the
@@ -1240,7 +1243,7 @@ impl Platform for AndroidPlatform {
         std::process::exit(0);
     }
 
-    fn restart(&self, _binary_path: Option<PathBuf>) {}
+    fn restart(&self, _binary_path: Option<PathBuf>, _arguments: Vec<OsString>) {}
     fn activate(&self, _ignoring_other_apps: bool) {}
     fn hide(&self) {}
     fn hide_other_apps(&self) {}
@@ -1367,7 +1370,7 @@ impl Platform for AndroidPlatform {
     fn reveal_path(&self, _path: &Path) {}
     fn open_with_system(&self, _path: &Path) {}
 
-    fn on_quit(&self, callback: Box<dyn FnMut()>) {
+    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
         self.common.borrow_mut().callbacks.quit = Some(callback);
     }
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
@@ -1427,21 +1430,22 @@ impl Platform for AndroidPlatform {
 
     fn write_credentials(
         &self,
-        _url: &str,
-        _username: &str,
-        _password: &[u8],
+        url: &str,
+        username: &str,
+        password: &[u8],
     ) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "credential storage not yet wired on Android"
-        )))
+        Task::ready(crate::credentials::write(
+            &self.android_app,
+            url,
+            username,
+            password,
+        ))
     }
-    fn read_credentials(&self, _url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
-        Task::ready(Ok(None))
+    fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
+        Task::ready(crate::credentials::read(&self.android_app, url))
     }
-    fn delete_credentials(&self, _url: &str) -> Task<Result<()>> {
-        Task::ready(Err(anyhow::anyhow!(
-            "credential storage not yet wired on Android"
-        )))
+    fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
+        Task::ready(crate::credentials::delete(&self.android_app, url))
     }
 
     fn keyboard_layout(&self) -> Box<dyn PlatformKeyboardLayout> {
