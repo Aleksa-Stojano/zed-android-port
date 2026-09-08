@@ -17,4 +17,4 @@ doctest = true
 
 [dependencies]
 rustls.workspace = true
-webpki-roots = "1.0"
+webpki-roots.workspace = true
