@@ -1,3 +1,11 @@
+NOT THE OFFICIAL ZDROID
+
+A PERSONAL FORK AN BUILD THAT FIXES ISSUES I NEEDED FIXED FOR DAILY USE
+
+REPEAT 
+
+NOT OFFICIAL 
+
 <p align="center">
   <img src="crates/gpui_android/examples/zed_android/docs/screenshots/zdroid-logo.png" width="120" alt="Zdroid logo" />
 </p>
