@@ -1376,6 +1376,9 @@ impl Platform for AndroidPlatform {
     fn on_reopen(&self, callback: Box<dyn FnMut()>) {
         self.common.borrow_mut().callbacks.reopen = Some(callback);
     }
+    fn on_system_sleep(&self, _callback: Box<dyn FnMut()>) {
+        // Same as wake: no OS sleep signal is delivered to the app process.
+    }
     fn on_system_wake(&self, _callback: Box<dyn FnMut()>) {
         // Android exposes no system sleep/wake signal to apps; process
         // lifecycle (onResume etc.) is a different concept and already
@@ -1397,6 +1400,9 @@ impl Platform for AndroidPlatform {
         ThermalState::Nominal
     }
     fn on_thermal_state_change(&self, _callback: Box<dyn FnMut()>) {}
+    fn prevent_idle_sleep(&self, _reason: &str) -> Task<Result<gpui::ActivityGuard>> {
+        Task::ready(Ok(gpui::ActivityGuard::noop()))
+    }
 
     fn compositor_name(&self) -> &'static str {
         "Android"

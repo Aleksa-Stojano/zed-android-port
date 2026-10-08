@@ -12,10 +12,11 @@ use ndk::native_window::NativeWindow;
 use raw_window_handle as rwh;
 
 use gpui::{
-    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, GpuSpecs, Modifiers,
-    PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Pixels,
-    Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams, point, px, size,
+    AnyWindowHandle, Bounds, Capslock, DevicePixels, DispatchEventResult, FrameRequestSource,
+    GpuSpecs, Modifiers, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformWindow, Pixels, Point, PromptButton, PromptLevel, RequestFrameOptions, Scene, Size,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowParams,
+    WindowVisibility, point, px, size,
 };
 use gpui_wgpu::{GpuContext, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
@@ -401,6 +402,8 @@ impl AndroidWindowStatePtr {
             callback(RequestFrameOptions {
                 require_presentation: false,
                 force_render,
+                signal_at: None,
+                signal_source: FrameRequestSource::NativeCallback,
             });
             self.callbacks.borrow_mut().request_frame = Some(callback);
         }
@@ -821,8 +824,14 @@ impl PlatformWindow for AndroidWindow {
             .borrow()
             .renderer
             .as_ref()
-            .map(|r| r.gpu_specs())
+            .and_then(|renderer| renderer.gpu_specs())
     }
+
+    fn visibility(&self) -> WindowVisibility {
+        WindowVisibility::Visible
+    }
+
+    fn on_visibility_change(&self, _callback: Box<dyn FnMut(WindowVisibility)>) {}
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
 }
